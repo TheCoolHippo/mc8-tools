@@ -5,6 +5,9 @@ benemon/morningstar-sdk (hardware-verified on firmware 3.13.6). Windows, standar
   python mc8usb.py write <single-bank.json> --yes     restore to its bankNumber, read back, compare
   python mc8usb.py setting <byte> <value> --yes   change one general setting (32-byte 03 21 layout), read back
   python mc8usb.py compare <a.json> <b.json>
+  python mc8usb.py settings read <out.json>       all 10 global sections (config, channels, omniports, ...), raw + decoded
+  python mc8usb.py settings write <in.json> <section> --yes   encode the decoded block, write, read back, compare
+  python mc8usb.py settings set <section.key.idx...> <value> --yes   e.g. config.brightness 5, omniports.0.type 1
 Close the web editor first: one program at a time on the port. Writes go to flash."""
 import ctypes as C, json, sys, time
 from ctypes import wintypes as W
@@ -196,12 +199,12 @@ class Session:
     def __enter__(self):
         self.p.send(build(0, 27))
         time.sleep(1.2)
-        self.p.drain()
+        self.opened = self.p.drain()   # the session-open avalanche (only source of the resistor ladder 03 28)
         return self
 
     def __exit__(self, *a):   # always leave edit mode, also after an error
         self.p.send(build(0, 28))
-        time.sleep(.3)
+        time.sleep(.3 + getattr(self, 'settle', 0))
 
     def select(self, bank):
         self.p.send(build(0, 0x1F, (bank, 1, 0, 0)))
@@ -239,6 +242,24 @@ class Session:
         self.p.send(build(4, 0)); time.sleep(.1)
         self.p.send(build(4, 2, payload=d)); time.sleep(.1)
         self.p.send(build(4, 1)); time.sleep(1.5); self.p.drain()
+
+    def settings(self, names=None):
+        from mc8set import SECTIONS, dec
+        fr = list(self.opened)
+        for n in names or SECTIONS:
+            if SECTIONS[n][0]:
+                self.p.send(build(0, SECTIONS[n][0])); fr += self.p.drain(.8)
+        got = {}
+        for f in fr:
+            if f[6] == 3: got[f[7]] = list(f[16:-2])   # last reply wins
+        return {n: {'raw': got[r], 'decoded': dec(n, got[r])} for n, (_, r, _) in SECTIONS.items()
+                if r in got and (names is None or n in names)}
+
+    def upload(self, cmd2, d):
+        self.p.send(build(4, 0)); time.sleep(.1)
+        self.p.send(build(4, cmd2, payload=bytes(d))); time.sleep(.1)
+        self.p.send(build(4, 1)); time.sleep(1.5); self.p.drain()
+        self.settle = 8   # the USB port refuses sends for a few seconds after a settings write
 
     def wait(self, arg):
         t = time.time()
@@ -345,6 +366,34 @@ def main():
             print('before', list(before)); print('after ', list(after))
             if after != d:
                 sys.exit('read back differs')
+        elif a[0] == 'settings':
+            from mc8set import SECTIONS, enc
+            if a[1] == 'read':
+                with Session(p) as s:
+                    d = s.settings()
+                json.dump(d, open(a[2], 'w'), indent=1)
+                print('read', ', '.join(f"{k} {len(v['raw'])}" for k, v in d.items()))
+                return
+            if '--yes' not in a:
+                raise SystemExit('add --yes: this writes to the MC8 flash')
+            with Session(p) as s:
+                if a[1] == 'write':
+                    name, want = a[3], json.load(open(a[2]))[a[3]]['decoded']
+                else:   # set
+                    path = a[2].split('.'); name = path[0]
+                    want = s.settings([name])[name]['decoded']
+                    o = want
+                    for k in path[1:-1]: o = o[int(k) if isinstance(o, list) else k]
+                    k = path[-1]; o[int(k) if isinstance(o, list) else k] = int(a[3])
+                s.upload(SECTIONS[name][2], enc(name, want)); time.sleep(.5)
+                s.opened = s.p.drain() if name != 'ladder' else s.opened
+                back = s.settings([name]) if name != 'ladder' else None
+            if back is None:
+                print('ladder written (read back needs a new session: run settings read)'); return
+            ok = back[name]['decoded'] == want
+            print(name, 'written, read back identical' if ok else 'DIFFERENT ' + json.dumps(back[name]['decoded'])[:600])
+            if not ok:
+                sys.exit(1)
         else:
             print(__doc__)
 
