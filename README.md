@@ -17,6 +17,7 @@ node mc8bak.mjs msg in.json out.json 1 B 1 "cc value scroll" a=press c=2 scroll=
 node mc8bak.mjs export out.json bank1.json 1
 python mc8usb.py read 1 bank1.json
 python mc8usb.py settings read settings.json
+python mc8usb.py settings show settings.json     # editor names and units (ms, %, ports...)
 python mc8usb.py settings set config.brightness 5 --yes
 python mc8usb.py settings write settings.json omniports --yes
 ```
@@ -37,6 +38,12 @@ python mc8usb.py settings write settings.json omniports --yes
 
 Verified on firmware 3.13.6: every section above except the ladder, the arrangement, the sequencer, the scroll counters and the event processor was written and read back identical; `config` was also changed and restored. After a
 settings write the USB port refuses sends for a few seconds; the script waits.
+
+`settings show` uses the value lists of the Morningstar web editor: MIDI channel (0 = Disabled), switch sensitivity
+(value + 1), long press (100 + 50 x value ms), bank change delay and display (10 x value ms), brightness (30 + 10 x value %),
+MIDI Thru per input as a bit mask (5 Bluetooth, 4 USB Host, 3 USB Device, 2 DIN5, 1 Omniport, 0 3.5mm),
+MIDI clock output ports as a 12-bit mask over bytes 22-23, omniport types (1 Expression, 5 MIDI Out Type A, 8 TRS Aux
+Switch, 11 Resistor Ladder, 12 Disabled...), relay NO/NC, fonts and waveform shapes.
 The hash is recalculated on every save. Writes over USB go to flash: back up first, and close the web editor
 (one program at a time on the port).
 

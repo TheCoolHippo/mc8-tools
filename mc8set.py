@@ -85,3 +85,69 @@ def enc(name, d):
 SECTIONS = {'config': (36, 0x21, 2), 'channels': (40, 0x20, 3), 'arrangement': (41, 0x22, 4),
             'waveform': (37, 0x24, 5), 'sequencer': (38, 0x25, 6), 'scroll': (39, 0x26, 7),
             'omniports': (42, 0x23, 8), 'events': (45, 0x27, 10), 'ladder': (None, 0x28, 11), 'clock': (80, 0x29, 12)}
+
+
+# Value meanings, from the Morningstar web editor (MC8 Pro general configuration page)
+ONOFF = lambda v: 'on' if v else 'off'
+THRU_DEST = {5: 'Bluetooth', 4: 'USB Host', 3: 'USB Device', 2: 'DIN5', 1: 'Omniport', 0: '3.5mm'}
+def thru(v): return ', '.join(n for b, n in THRU_DEST.items() if v >> b & 1) or 'none'
+CLOCK_PORTS = ['DIN MIDI', 'USB Device Port 1', 'Omniport 1', 'Omniport 2', 'Omniport 3', 'Omniport 4',
+               '3.5mm TRS MIDI', 'USB Device Port 2', 'USB Device Port 3', 'USB Device Port 4', 'USB Host', 'Bluetooth']
+OMNI_TYPE = {12: 'Disabled', 8: 'TRS Aux Switch', 11: 'Resistor Ladder Aux Switch', 1: 'Expression',
+             5: 'MIDI Out - Type A (Standard)', 6: 'MIDI Out - Tip Active', 7: 'MIDI Out - Ring Active',
+             9: 'MIDI Out - Type B', 10: 'Ext Omniport Relay Interface', 0: '(Deprecated) Aux Switch'}
+RELAY = ['Tip NO, Ring NO', 'Tip NO, Ring NC', 'Tip NC, Ring NO', 'Tip NC, Ring NC']
+FONT = lambda v: 18 - v if 0 <= v <= 10 else v
+WAVE = ['Off', 'Sawtooth Up', 'Sawtooth Down', 'Triangle', 'Sine', 'Square', 'Random']
+CFG_SHOW = {
+    'midiChannel': ('MIDI Channel', lambda v: 'Disabled' if v == 0 else v),
+    'switchSensitivity': ('Switch Sensitivity', lambda v: v + 1),
+    'longPressTime': ('Long Press Time', lambda v: f'{100 + 50 * v} ms'),
+    'bankChangeDelay': ('Bank Change Delay Time', lambda v: f'{10 * v} ms'),
+    'bankChangeDisplay': ('Bank Change Display Time', lambda v: f'{10 * v} ms'),
+    'midiSendDelay': ('MIDI Send Delay', lambda v: f'{v} ms'),
+    'numMidiCable': ('USB Virtual MIDI Ports', str),
+    'dualLock': ('Dual Switch Lock', ONOFF), 'midiClockPersist': ('MIDI Clock Persist', ONOFF),
+    'rememberToggleStates': ('Remember Toggle States', ONOFF), 'loadLastBank': ('Load last used bank on power up', ONOFF),
+    'ignoreMidiClock': ('Ignore MIDI Clock', ONOFF), 'lcdAlign': ('Align LCD Names', ONOFF),
+    'showPresetLabels': ('Show Preset Labels', ONOFF),
+    'thruUSBHost': ('USB Host MIDI In, thru to', thru), 'thruUSBDevice': ('USB Device MIDI In, thru to', thru),
+    'thruDIN5': ('DIN5 MIDI In, thru to', thru), 'thru35mm': ('3.5mm MIDI In, thru to', thru),
+    'thruBluetooth': ('Bluetooth MIDI In, thru to', thru),
+    'btStartupDelay': ('Bluetooth Startup Delay', lambda v: 'OFF' if v == 0 else f'{10 * (v - 1)} s'),
+    'screenSaver': ('Screensaver', lambda v: 'Off' if v == 0 else f'{v} h'),
+    'brightness': ('Brightness', lambda v: f'{30 + 10 * v} %'),
+    'relayPortA': ('Relay Port A', lambda v: RELAY[v] if v < 4 else v),
+    'relayPortB': ('Relay Port B', lambda v: RELAY[v] if v < 4 else v),
+    'presetMaxFont': ('Preset Max Font Size', FONT), 'middleLayerFont': ('Bank / Preset Long Name Font Size', FONT),
+    'bankPageFont': ('Bank Page Font Size', lambda v: ['Large', 'Medium', 'Small', 'Hidden'][v] if v < 4 else v),
+}
+
+
+def describe(s):
+    """Readable lines for a settings dict (as written by settings read)."""
+    out = []
+    c = s['config']['decoded']
+    for k, (lab, f) in CFG_SHOW.items():
+        out.append(f'{lab}: {f(c[k])}   [config.{k} = {c[k]}]')
+    clk = c['clockOutLSB'] | c['clockOutMSB'] << 7
+    out.append('MIDI Clock ports: ' + (', '.join(n for i, n in enumerate(CLOCK_PORTS) if clk >> i & 1) or 'none'))
+    for o in s['omniports']['decoded']:
+        out.append(f"Omniport {o['portNum'] + 1}: {OMNI_TYPE.get(o['type'], o['type'])}   [omniports.{o['portNum']}.type = {o['type']}]")
+    for i, w in enumerate(s['waveform']['decoded']):
+        if w['type']: out.append(f"Waveform {i + 1}: {WAVE[w['type']] if w['type'] < 7 else w['type']} {w['min']}-{w['max']}")
+    for i, q in enumerate(s['sequencer']['decoded']):
+        if q['len'] or any(q['steps']): out.append(f"Sequencer {i + 1}: len {q['len']} steps {q['steps']}")
+    for i, q in enumerate(s['scroll']['decoded']):
+        if (q['min'], q['max'], q['start']) != (0, 127, 0): out.append(f"Scroll counter {i + 1}: {q['min']}-{q['max']} start {q['start']}")
+    for e in s['events']['decoded']:
+        if any(v for k, v in e.items() if k != 'slot'): out.append(f"Event rule {e['slot'] + 1}: {e}")
+    for c2 in s['channels']['decoded']:
+        if c2.get('name') or c2['remap'] or any(c2['attr']): out.append(f"MIDI channel {c2['n'] + 1}: {c2}")
+    a = s['arrangement']['decoded']
+    out.append('Bank arrangement: ' + ('custom' if a['active'] else 'default order'))
+    bpm = [b for b in s['clock']['decoded']['bpm'] if b]
+    out.append('MIDI clock BPM slots: ' + (', '.join(map(str, bpm)) or 'all empty'))
+    lad = [l for l in s['ladder']['decoded'] if l['trigger'] or l['f1'] or l['f2']]
+    out.append(f'Resistor ladder switches set: {len(lad)}')
+    return out

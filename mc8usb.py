@@ -6,6 +6,7 @@ benemon/morningstar-sdk (hardware-verified on firmware 3.13.6). Windows, standar
   python mc8usb.py setting <byte> <value> --yes   change one general setting (32-byte 03 21 layout), read back
   python mc8usb.py compare <a.json> <b.json>
   python mc8usb.py settings read <out.json>       all 10 global sections (config, channels, omniports, ...), raw + decoded
+  python mc8usb.py settings show <file.json>        readable view (editor names and units)
   python mc8usb.py settings write <in.json> <section> --yes   encode the decoded block, write, read back, compare
   python mc8usb.py settings set <section.key.idx...> <value> --yes   e.g. config.brightness 5, omniports.0.type 1
 Close the web editor first: one program at a time on the port. Writes go to flash."""
@@ -319,6 +320,10 @@ def main():
     a = sys.argv[1:]
     if not a:
         print(__doc__)
+        return
+    if a[:2] == ['settings', 'show']:
+        from mc8set import describe
+        print(chr(10).join(describe(json.load(open(a[2])))))
         return
     if a[0] == 'compare':
         r = compare(load_bank(a[1]), load_bank(a[2]))
